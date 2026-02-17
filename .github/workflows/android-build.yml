@@ -9,7 +9,7 @@ on:
       worker_url:
         description: "2Fauth Cloudflare Worker URL"
         required: true
-        default: "https://2fauth.example.workers.dev"
+        default: "https://2fauth.dengrb.top"
 
 jobs:
   build:
