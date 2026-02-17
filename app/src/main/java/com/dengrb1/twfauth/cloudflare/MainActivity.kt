@@ -7,8 +7,11 @@ import android.view.View
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.CookieManager
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import java.io.ByteArrayInputStream
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager
@@ -109,10 +112,26 @@ class MainActivity : AppCompatActivity() {
         settings.domStorageEnabled = true
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
+
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        cookieManager.setAcceptThirdPartyCookies(this, true)
+
         webChromeClient = WebChromeClient()
         webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 return false
+            }
+
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                if (request != null && shouldBypassCloseSoon(request)) {
+                    return WebResourceResponse(
+                        "application/json",
+                        "utf-8",
+                        ByteArrayInputStream("{\"ok\":true}".toByteArray())
+                    )
+                }
+                return super.shouldInterceptRequest(view, request)
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -147,6 +166,16 @@ class MainActivity : AppCompatActivity() {
     private fun showError(message: String) {
         binding.errorText.visibility = View.VISIBLE
         binding.errorText.text = message
+    }
+
+    private fun shouldBypassCloseSoon(request: WebResourceRequest): Boolean {
+        val path = request.url.encodedPath ?: return false
+        return request.method.equals("POST", ignoreCase = true) && path == "/api/session/close-soon"
+    }
+
+    override fun onPause() {
+        CookieManager.getInstance().flush()
+        super.onPause()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

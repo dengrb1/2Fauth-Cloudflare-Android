@@ -33,3 +33,9 @@ gradle assembleDebug -PworkerUrl="${WORKER_URL}"
 ```
 
 构建成功后会上传 `app-debug.apk` 作为 Artifact。
+
+## Android 客户端会话说明（适配上游新接口）
+
+2Fauth-Cloudflare上游已将 `POST /api/session/close-soon` 标记为 Web 页面 `beforeunload` 内部机制，不建议第三方客户端调用。
+
+本 Android 客户端已适配：在 WebView 中拦截该接口请求，避免 App 生命周期触发页面卸载时提前缩短会话，减少“自动退出登录”问题。
