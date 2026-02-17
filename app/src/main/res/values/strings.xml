@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">2Fauth CF</string>
+    <string name="error_loading_page">页面加载失败：%1$s</string>
+</resources>
