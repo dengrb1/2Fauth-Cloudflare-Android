@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">2Fauth CF</string>
+    <string name="error_loading_page">页面加载失败：%1$s</string>
+    <string name="auth_title">身份验证</string>
+    <string name="auth_subtitle">请验证指纹、人脸或设备密码后继续</string>
+    <string name="auth_error">验证失败：%1$s</string>
+    <string name="auth_unavailable">当前设备未配置可用的生物识别或锁屏密码</string>
+    <string name="camera_permission_denied">无法访问摄像头：权限被拒绝，请在系统设置中允许相机权限</string>
+</resources>
