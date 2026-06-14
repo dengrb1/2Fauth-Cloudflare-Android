@@ -199,8 +199,8 @@
                     app:icon="@drawable/ic_qr"
                     app:iconGravity="textEnd"
                     app:iconPadding="6dp"
-                    app:iconTint="@color/panel_darker"
-                    android:textColor="@color/panel_darker" />
+                    app:iconTint="@color/on_accent_yellow"
+                    android:textColor="@color/on_accent_yellow" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/manageButton"
@@ -209,7 +209,8 @@
                     android:layout_marginStart="10dp"
                     android:minWidth="92dp"
                     android:text="@string/manage"
-                    app:backgroundTint="@color/panel_dark"
+                    android:textColor="@color/on_secondary_button"
+                    app:backgroundTint="@color/secondary_button_background"
                     app:cornerRadius="21dp" />
             </LinearLayout>
         </LinearLayout>

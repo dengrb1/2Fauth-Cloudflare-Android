@@ -68,7 +68,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var scannerLauncher: ActivityResultLauncher<ScanOptions>
     private lateinit var exportLauncher: ActivityResultLauncher<String>
     private lateinit var importLauncher: ActivityResultLauncher<Array<String>>
-    private val settings by lazy { AppSettings(this) }
     private val api = ApiClient(BuildConfig.WORKER_URL)
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
@@ -100,7 +99,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        applyThemeMode(settings.themeMode)
+        applyDarkTheme()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -539,7 +538,6 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.new_group),
             getString(R.string.manage_groups),
             getString(R.string.change_password),
-            getString(R.string.theme_named, themeLabel(settings.themeMode)),
             getString(R.string.refresh),
             getString(R.string.language_named, LocaleHelper.displayNameFor(LocaleHelper.getSavedLanguage(this))),
             getString(R.string.logout),
@@ -551,9 +549,9 @@ class MainActivity : AppCompatActivity() {
                     0 -> toggleManageMode()
                     1 -> showExportDialog()
                     2 -> showImportChoice()
-                    3 -> showGroupManageDialog()
-                    4 -> showChangePasswordDialog()
-                    5 -> showThemeDialog()
+                    3 -> showGroupDialog()
+                    4 -> showGroupManageDialog()
+                    5 -> showChangePasswordDialog()
                     6 -> refreshEntries()
                     7 -> toggleLanguage()
                     8 -> logout()
@@ -875,29 +873,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showThemeDialog() {
-        val themes = ThemeMode.values()
-        val labels = themes.map { themeLabel(it) }.toTypedArray()
-        val checked = themes.indexOf(settings.themeMode).coerceAtLeast(0)
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.theme)
-            .setSingleChoiceItems(labels, checked) { dialog, which ->
-                settings.themeMode = themes[which]
-                applyThemeMode(themes[which])
-                dialog.dismiss()
-                recreate()
-            }
-            .show()
-    }
-
-    private fun applyThemeMode(themeMode: ThemeMode) {
-        AppCompatDelegate.setDefaultNightMode(
-            when (themeMode) {
-                ThemeMode.SYSTEM -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
-                ThemeMode.LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
-                ThemeMode.DARK -> AppCompatDelegate.MODE_NIGHT_YES
-            }
-        )
+    private fun applyDarkTheme() {
+        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
     }
 
     private fun applyEntryFilter() {
@@ -939,16 +916,6 @@ class MainActivity : AppCompatActivity() {
             trimmed.contains("\"encrypted\"") || trimmed.contains("\"ciphertext\"") -> labels[2]
             else -> labels[0]
         }
-    }
-
-    private fun themeLabel(theme: ThemeMode): String {
-        return getString(
-            when (theme) {
-                ThemeMode.SYSTEM -> R.string.theme_system
-                ThemeMode.LIGHT -> R.string.theme_light
-                ThemeMode.DARK -> R.string.theme_dark
-            }
-        )
     }
 
     private fun clearSession() {
@@ -1523,28 +1490,6 @@ private enum class ImportFormat {
     PLAIN_JSON,
     OTPAUTH,
     ENCRYPTED_JSON,
-}
-
-private enum class ThemeMode {
-    SYSTEM,
-    LIGHT,
-    DARK,
-}
-
-private class AppSettings(context: Context) {
-    private val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
-
-    var themeMode: ThemeMode
-        get() = runCatching {
-            ThemeMode.valueOf(prefs.getString(KEY_THEME, ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name)
-        }.getOrDefault(ThemeMode.SYSTEM)
-        set(value) {
-            prefs.edit().putString(KEY_THEME, value.name).apply()
-        }
-
-    companion object {
-        private const val KEY_THEME = "theme"
-    }
 }
 
 private class UnauthorizedException : Exception()

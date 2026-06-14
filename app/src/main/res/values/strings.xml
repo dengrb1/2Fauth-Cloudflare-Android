@@ -83,10 +83,5 @@
     <string name="paste_import_content">Paste Content</string>
     <string name="exported">Exported</string>
     <string name="imported">Imported</string>
-    <string name="theme">Theme</string>
-    <string name="theme_named">Theme: %1$s</string>
-    <string name="theme_system">Follow system</string>
-    <string name="theme_light">Light</string>
-    <string name="theme_dark">Dark</string>
     <string name="plaintext_export_warning">Plain export contains OTP secrets. Continue only on a trusted device.</string>
 </resources>

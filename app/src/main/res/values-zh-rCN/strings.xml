@@ -84,10 +84,5 @@
     <string name="paste_import_content">粘贴内容</string>
     <string name="exported">已导出</string>
     <string name="imported">已导入</string>
-    <string name="theme">主题</string>
-    <string name="theme_named">主题：%1$s</string>
-    <string name="theme_system">跟随系统</string>
-    <string name="theme_light">浅色</string>
-    <string name="theme_dark">深色</string>
     <string name="plaintext_export_warning">明文导出包含所有 OTP 密钥，请仅在可信设备上继续。</string>
 </resources>
