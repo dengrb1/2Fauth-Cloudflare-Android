@@ -1,49 +1,47 @@
 # 2Fauth-Cloudflare-Android
 
-这是一个面向 [dengrb1/2Fauth-Cloudflare](https://github.com/dengrb1/2Fauth-Cloudflare) 的 Android 客户端。
+Android client for `2Fauth-Cloudflare`.
 
-应用采用 `WebView` 方式加载你自己的 Cloudflare Worker 页面，提供：
+This version uses the Worker `/api/v1` Bearer Token API directly instead of loading the Web UI in a WebView.
 
-- 快捷打开 2FA 页面
-- Android 原生返回键回退网页历史
-- 页面加载中的进度提示与错误提示
-- **构建时可配置 Worker URL**（本地构建 + GitHub Actions）
+## Features
 
-## 本地构建
+- Native username/password login through `POST /api/v1/auth/login`
+- Encrypted local storage for access and refresh tokens
+- Access token refresh through `POST /api/v1/auth/refresh`
+- Local biometric or device-credential unlock before showing saved sessions
+- Native entry list from `GET /api/v1/entries`
+- Batched TOTP refresh through `POST /api/v1/codes/batch`
+- HOTP generation through `POST /api/v1/entries/:id/hotp`
+- Tap a visible code to copy it to the clipboard
+
+## Build
+
+Set your Worker URL at build time:
 
 ```bash
-gradle assembleDebug -PworkerUrl="https://你的worker地址.workers.dev"
+gradle assembleDebug -PworkerUrl="https://your-worker.workers.dev"
 ```
 
-如果不传 `-PworkerUrl`，将使用 `gradle.properties` 中的默认值。
+If `-PworkerUrl` is omitted, the value in `gradle.properties` is used.
 
-## GitHub Actions 手动构建
+This repository currently does not include a Gradle Wrapper. Install Gradle locally or add a wrapper before running `assembleDebug`.
 
-仓库内置工作流：`.github/workflows/android-build.yml`
+## GitHub Actions
 
-在 Actions 页面手动触发 `Android CI Build`，并传入 `worker_url`。
-
-也可在仓库 Variables 中设置 `WORKER_URL` 作为默认值（当手动输入为空时使用）。
-
-构建命令会自动将参数注入：
+The workflow at `.github/workflows/android-build.yml` accepts a `worker_url` input and injects it as:
 
 ```bash
 gradle assembleDebug -PworkerUrl="${WORKER_URL}"
 ```
 
-构建成功后会上传 `app-debug.apk` 作为 Artifact。
+The resulting debug APK is uploaded as an artifact.
 
-## Android 客户端会话说明（适配上游新接口）
+## API Notes
 
-上游已将 `POST /api/session/close-soon` 标记为 Web 页面 `beforeunload` 内部机制，不建议第三方客户端调用。
+The app expects the Worker API documented in `F:\code\2Fauth-Cloudflare\API.md`:
 
-本 Android 客户端已适配：在 WebView 中拦截该接口请求，避免 App 生命周期触发页面卸载时提前缩短会话，减少“自动退出登录”问题。
-
-## 摄像头扫码权限
-
-如果扫码时报错“无法访问摄像头: Permission denied”，请确认：
-
-1. Android 应用已获取系统相机权限（首次扫码会弹框请求）
-2. 在系统设置中手动开启本应用的相机权限
-
-本项目已在客户端中加入 WebView 摄像头权限桥接与运行时权限申请。
+- `clientType` is sent as `android`
+- `Authorization: Bearer <accessToken>` is used for authenticated routes
+- Refresh tokens are rotated, so the app persists the latest token after every refresh
+- Browser-only cookie routes and `/api/session/close-soon` are not used

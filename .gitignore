@@ -5,3 +5,37 @@ local.properties
 *.iml
 .idea/
 .DS_Store
+
+# Kotlin & IDE
+.kotlin/
+*.log
+*.tmp
+
+# Android captures & native build
+/captures/
+/app/captures/
+.externalNativeBuild/
+/app/.externalNativeBuild/
+
+# Private data & credentials
+*.keystore
+*.jks
+*.p12
+*.cer
+google-services.json
+*.env
+*.env.local
+secrets.properties
+*.secret
+
+# Temporary assets & screenshots
+/Photos/
+
+# Generated & compiled
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+/bin/
+/gen/
