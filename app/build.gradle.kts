@@ -11,8 +11,8 @@ android {
         applicationId = "com.dengrb1.twfauth.cloudflare"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.1.0"
+        versionCode = 2
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         val workerUrl = (project.findProperty("workerUrl") as String?)
