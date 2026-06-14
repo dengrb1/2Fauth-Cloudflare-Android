@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">2Fauth CF</string>
     <string name="app_title">2Fauth Cloudflare</string>
@@ -58,4 +59,35 @@
     <string name="group_color">分组颜色</string>
     <string name="group_name_required">请输入分组名称</string>
     <string name="no_group_to_delete">没有可删除的分组</string>
+    <string name="edit_group">编辑分组</string>
+    <string name="manage_groups">管理分组</string>
+    <string name="entry_enabled">条目已启用</string>
+    <string name="enable_entry">启用验证码</string>
+    <string name="disable_entry">停用验证码</string>
+    <string name="disabled_entry">已停用</string>
+    <string name="export_otp">导出 OTP</string>
+    <string name="import_otp">导入 OTP</string>
+    <string name="format">格式</string>
+    <string name="format_plain_json">明文 JSON</string>
+    <string name="format_otpauth">otpauth 文本</string>
+    <string name="format_encrypted_json">加密 JSON</string>
+    <string name="current_password">当前密码</string>
+    <string name="new_password">新密码</string>
+    <string name="password_policy">至少 12 位，并包含大小写字母、数字和符号。</string>
+    <string name="change_password">修改密码</string>
+    <string name="password_changed">密码已修改，请重新登录。</string>
+    <string name="password_required">请输入需要的密码字段</string>
+    <string name="backup_passphrase">备份口令</string>
+    <string name="passphrase_required">请输入备份口令</string>
+    <string name="import_content">导入内容</string>
+    <string name="choose_import_file">选择文件</string>
+    <string name="paste_import_content">粘贴内容</string>
+    <string name="exported">已导出</string>
+    <string name="imported">已导入</string>
+    <string name="theme">主题</string>
+    <string name="theme_named">主题：%1$s</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="plaintext_export_warning">明文导出包含所有 OTP 密钥，请仅在可信设备上继续。</string>
 </resources>

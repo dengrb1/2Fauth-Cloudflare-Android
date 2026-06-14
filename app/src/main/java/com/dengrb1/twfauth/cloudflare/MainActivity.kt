@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -19,10 +20,15 @@ import android.widget.ArrayAdapter
 import android.widget.AutoCompleteTextView
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -30,6 +36,9 @@ import androidx.security.crypto.MasterKey
 import com.dengrb1.twfauth.cloudflare.databinding.ActivityMainBinding
 import com.dengrb1.twfauth.cloudflare.databinding.DialogEntryBinding
 import com.dengrb1.twfauth.cloudflare.databinding.DialogGroupBinding
+import com.dengrb1.twfauth.cloudflare.databinding.DialogImportExportBinding
+import com.dengrb1.twfauth.cloudflare.databinding.DialogImportTextBinding
+import com.dengrb1.twfauth.cloudflare.databinding.DialogPasswordBinding
 import com.dengrb1.twfauth.cloudflare.databinding.ItemEntryBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.journeyapps.barcodescanner.ScanContract
@@ -41,6 +50,9 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.max
@@ -54,6 +66,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var tokenStore: TokenStore
     private lateinit var scannerLauncher: ActivityResultLauncher<ScanOptions>
+    private lateinit var exportLauncher: ActivityResultLauncher<String>
+    private lateinit var importLauncher: ActivityResultLauncher<Array<String>>
+    private val settings by lazy { AppSettings(this) }
     private val api = ApiClient(BuildConfig.WORKER_URL)
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
@@ -61,6 +76,7 @@ class MainActivity : AppCompatActivity() {
         onEntryClick = { entry -> handleEntryTap(entry) },
         onEditClick = { entry -> showEntryDialog(entry = entry) },
         onDeleteClick = { entry -> confirmDelete(entry) },
+        onEnabledChange = { entry, enabled -> setEntryEnabled(entry, enabled) },
     )
 
     private var isUnlocked = false
@@ -74,6 +90,7 @@ class MainActivity : AppCompatActivity() {
     private var showUngroupedOnly = false
     private var isManageMode = false
     private var refreshInFlight = false
+    private var pendingExport: ExportRequest? = null
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -83,6 +100,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        applyThemeMode(settings.themeMode)
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -92,6 +110,12 @@ class MainActivity : AppCompatActivity() {
             if (!contents.isNullOrBlank()) {
                 showEntryDialog(initialUri = contents)
             }
+        }
+        exportLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            uri?.let { writePendingExport(it) }
+        }
+        importLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri?.let { readImportFile(it) }
         }
 
         tokenStore = TokenStore(this)
@@ -209,13 +233,18 @@ class MainActivity : AppCompatActivity() {
         executor.execute {
             try {
                 val token = validAccessToken()
-                val loadedGroups = api.groups(token)
-                val loadedEntries = api.entries(token)
-                val totpIds = loadedEntries.filter { it.otpType != "hotp" }.map { it.id }
+                val appData = api.appData(token)
+                val loadedGroups = appData.groups
+                val loadedEntries = appData.entries
+                val totpIds = loadedEntries.filter { it.enabled && it.otpType != "hotp" }.map { it.id }
                 val codes = if (totpIds.isNotEmpty()) api.codesBatch(token, totpIds) else emptyMap()
                 val merged = loadedEntries.map { entry ->
                     val code = codes[entry.id]
-                    if (code != null) entry.copy(code = code.code, expiresIn = code.expiresIn) else entry
+                    if (entry.enabled && code != null) {
+                        entry.copy(code = code.code, expiresIn = code.expiresIn)
+                    } else {
+                        entry.copy(code = "", expiresIn = null)
+                    }
                 }
                 entries = merged
                 groups = loadedGroups
@@ -245,6 +274,10 @@ class MainActivity : AppCompatActivity() {
             showEntryDialog(entry = entry)
             return
         }
+        if (!entry.enabled) {
+            Toast.makeText(this, R.string.disabled_entry, Toast.LENGTH_SHORT).show()
+            return
+        }
         if (entry.otpType == "hotp") {
             generateHotp(entry)
         } else if (entry.code.isNotBlank()) {
@@ -253,6 +286,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun generateHotp(entry: Entry) {
+        if (!entry.enabled) return
         setLoading(true)
         executor.execute {
             try {
@@ -347,7 +381,7 @@ class MainActivity : AppCompatActivity() {
 
         dialog.setOnShowListener {
             dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val draft = dialogBinding.toEntryDraft(groups, isEdit)
+                val draft = dialogBinding.toEntryDraft(groups, isEdit, entry?.enabled ?: true)
                 if (draft == null) {
                     showError(getString(R.string.entry_required))
                     return@setOnClickListener
@@ -359,7 +393,11 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun DialogEntryBinding.toEntryDraft(availableGroups: List<Group>, isEdit: Boolean): EntryDraft? {
+    private fun DialogEntryBinding.toEntryDraft(
+        availableGroups: List<Group>,
+        isEdit: Boolean,
+        enabled: Boolean,
+    ): EntryDraft? {
         val uri = uriInput.text?.toString()?.trim().orEmpty()
         val label = labelInput.text?.toString()?.trim().orEmpty()
         val secret = secretInput.text?.toString()?.trim().orEmpty()
@@ -378,6 +416,7 @@ class MainActivity : AppCompatActivity() {
             hotpCounter = counterInput.text?.toString()?.toLongOrNull() ?: 0L,
             groupId = availableGroups.firstOrNull { it.name == groupName }?.id,
             includeSecret = !isEdit || secret.isNotBlank(),
+            enabled = enabled,
         )
     }
 
@@ -404,6 +443,29 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 runOnUiThread {
                     setLoading(false)
+                    showError(getString(R.string.network_error, e.message ?: getString(R.string.unknown_error)))
+                }
+            }
+        }
+    }
+
+    private fun setEntryEnabled(entry: Entry, enabled: Boolean) {
+        val previous = entries
+        entries = entries.map {
+            if (it.id == entry.id) it.copy(enabled = enabled, code = "", expiresIn = null) else it
+        }
+        applyEntryFilter()
+        executor.execute {
+            try {
+                val token = validAccessToken()
+                api.setEntryEnabled(token, entry.id, enabled)
+                if (enabled) {
+                    runOnUiThread { refreshEntries() }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    entries = previous
+                    applyEntryFilter()
                     showError(getString(R.string.network_error, e.message ?: getString(R.string.unknown_error)))
                 }
             }
@@ -472,8 +534,12 @@ class MainActivity : AppCompatActivity() {
     private fun showManageMenu() {
         val labels = listOf(
             getString(if (isManageMode) R.string.done else R.string.manage_entries),
+            getString(R.string.export_otp),
+            getString(R.string.import_otp),
             getString(R.string.new_group),
-            getString(R.string.delete_group),
+            getString(R.string.manage_groups),
+            getString(R.string.change_password),
+            getString(R.string.theme_named, themeLabel(settings.themeMode)),
             getString(R.string.refresh),
             getString(R.string.language_named, LocaleHelper.displayNameFor(LocaleHelper.getSavedLanguage(this))),
             getString(R.string.logout),
@@ -483,11 +549,14 @@ class MainActivity : AppCompatActivity() {
             .setItems(labels.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> toggleManageMode()
-                    1 -> showGroupDialog()
-                    2 -> showDeleteGroupDialog()
-                    3 -> refreshEntries()
-                    4 -> toggleLanguage()
-                    5 -> logout()
+                    1 -> showExportDialog()
+                    2 -> showImportChoice()
+                    3 -> showGroupManageDialog()
+                    4 -> showChangePasswordDialog()
+                    5 -> showThemeDialog()
+                    6 -> refreshEntries()
+                    7 -> toggleLanguage()
+                    8 -> logout()
                 }
             }
             .show()
@@ -508,6 +577,27 @@ class MainActivity : AppCompatActivity() {
                     createGroup(name, color)
                 }
             }
+            .show()
+    }
+
+    private fun showGroupManageDialog() {
+        val labels = listOf(getString(R.string.new_group)) + groups.map { it.name }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.manage_groups)
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == 0) {
+                    showGroupDialog()
+                } else {
+                    groups.getOrNull(which - 1)?.let { showGroupActions(it) }
+                }
+            }
+            .show()
+    }
+
+    private fun showGroupActions(group: Group) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(group.name)
+            .setItems(arrayOf(getString(R.string.delete_group))) { _, _ -> deleteGroup(group) }
             .show()
     }
 
@@ -565,6 +655,251 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun showExportDialog() {
+        val dialogBinding = DialogImportExportBinding.inflate(layoutInflater)
+        val formats = listOf(
+            getString(R.string.format_encrypted_json),
+            getString(R.string.format_plain_json),
+            getString(R.string.format_otpauth),
+        )
+        dialogBinding.formatInput.setSimpleItems(formats)
+        dialogBinding.formatInput.setText(formats.first(), false)
+
+        fun updateFields() {
+            val encrypted = dialogBinding.formatInput.text.toString() == formats[0]
+            dialogBinding.passphraseLayout.isVisible = encrypted
+            dialogBinding.passwordLayout.isVisible = !encrypted
+        }
+        dialogBinding.formatInput.setOnItemClickListener { _, _, _, _ -> updateFields() }
+        updateFields()
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.export_otp)
+            .setView(dialogBinding.root)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.export_otp, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val format = when (dialogBinding.formatInput.text.toString()) {
+                    formats[1] -> ExportFormat.PLAIN_JSON
+                    formats[2] -> ExportFormat.OTPAUTH
+                    else -> ExportFormat.ENCRYPTED_JSON
+                }
+                val password = dialogBinding.passwordInput.text?.toString().orEmpty()
+                val passphrase = dialogBinding.passphraseInput.text?.toString().orEmpty()
+                if (format == ExportFormat.ENCRYPTED_JSON && passphrase.isBlank()) {
+                    showError(getString(R.string.passphrase_required))
+                    return@setOnClickListener
+                }
+                if (format != ExportFormat.ENCRYPTED_JSON && password.isBlank()) {
+                    showError(getString(R.string.password_required))
+                    return@setOnClickListener
+                }
+                if (format != ExportFormat.ENCRYPTED_JSON) {
+                    Toast.makeText(this, R.string.plaintext_export_warning, Toast.LENGTH_LONG).show()
+                }
+                pendingExport = ExportRequest(format, password, passphrase)
+                exportLauncher.launch(exportFileName(format))
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun writePendingExport(uri: Uri) {
+        val request = pendingExport ?: return
+        setLoading(true)
+        executor.execute {
+            try {
+                val token = validAccessToken()
+                val text = when (request.format) {
+                    ExportFormat.ENCRYPTED_JSON -> api.exportEncrypted(token, request.passphrase)
+                    ExportFormat.PLAIN_JSON -> api.exportPlain(token, request.password)
+                    ExportFormat.OTPAUTH -> api.exportOtpAuth(token, request.password)
+                }
+                contentResolver.openOutputStream(uri)?.use { stream ->
+                    stream.write(text.toByteArray(Charsets.UTF_8))
+                } ?: throw ApiException("Cannot open export target")
+                runOnUiThread {
+                    setLoading(false)
+                    Toast.makeText(this, R.string.exported, Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    setLoading(false)
+                    showError(getString(R.string.network_error, e.message ?: getString(R.string.unknown_error)))
+                }
+            } finally {
+                pendingExport = null
+            }
+        }
+    }
+
+    private fun showImportChoice() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.import_otp)
+            .setItems(arrayOf(getString(R.string.choose_import_file), getString(R.string.paste_import_content))) { _, which ->
+                if (which == 0) {
+                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                } else {
+                    showImportTextDialog()
+                }
+            }
+            .show()
+    }
+
+    private fun readImportFile(uri: Uri) {
+        try {
+            val text = contentResolver.openInputStream(uri)?.use { stream ->
+                stream.bufferedReader(Charsets.UTF_8).readText()
+            }.orEmpty()
+            showImportTextDialog(text)
+        } catch (e: Exception) {
+            showError(getString(R.string.network_error, e.message ?: getString(R.string.unknown_error)))
+        }
+    }
+
+    private fun showImportTextDialog(initialText: String = "") {
+        val dialogBinding = DialogImportTextBinding.inflate(layoutInflater)
+        val formats = listOf(
+            getString(R.string.format_plain_json),
+            getString(R.string.format_otpauth),
+            getString(R.string.format_encrypted_json),
+        )
+        dialogBinding.formatInput.setSimpleItems(formats)
+        dialogBinding.formatInput.setText(detectImportFormat(initialText, formats), false)
+        dialogBinding.importTextInput.setText(initialText)
+
+        fun updateFields() {
+            dialogBinding.passphraseLayout.isVisible = dialogBinding.formatInput.text.toString() == formats[2]
+        }
+        dialogBinding.formatInput.setOnItemClickListener { _, _, _, _ -> updateFields() }
+        updateFields()
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.import_otp)
+            .setView(dialogBinding.root)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.import_otp, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val text = dialogBinding.importTextInput.text?.toString().orEmpty()
+                if (text.isBlank()) {
+                    showError(getString(R.string.entry_required))
+                    return@setOnClickListener
+                }
+                val format = when (dialogBinding.formatInput.text.toString()) {
+                    formats[1] -> ImportFormat.OTPAUTH
+                    formats[2] -> ImportFormat.ENCRYPTED_JSON
+                    else -> ImportFormat.PLAIN_JSON
+                }
+                val passphrase = dialogBinding.passphraseInput.text?.toString().orEmpty()
+                if (format == ImportFormat.ENCRYPTED_JSON && passphrase.isBlank()) {
+                    showError(getString(R.string.passphrase_required))
+                    return@setOnClickListener
+                }
+                dialog.dismiss()
+                importOtp(text, format, passphrase)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun importOtp(text: String, format: ImportFormat, passphrase: String) {
+        setLoading(true)
+        executor.execute {
+            try {
+                val token = validAccessToken()
+                when (format) {
+                    ImportFormat.PLAIN_JSON -> api.importPlain(token, JSONObject(text))
+                    ImportFormat.OTPAUTH -> api.importOtpAuth(token, text)
+                    ImportFormat.ENCRYPTED_JSON -> {
+                        val json = JSONObject(text)
+                        api.importEncrypted(token, json.optJSONObject("encrypted") ?: json, passphrase)
+                    }
+                }
+                runOnUiThread {
+                    Toast.makeText(this, R.string.imported, Toast.LENGTH_SHORT).show()
+                    refreshEntries()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    setLoading(false)
+                    showError(getString(R.string.network_error, e.message ?: getString(R.string.unknown_error)))
+                }
+            }
+        }
+    }
+
+    private fun showChangePasswordDialog() {
+        val dialogBinding = DialogPasswordBinding.inflate(layoutInflater)
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.change_password)
+            .setView(dialogBinding.root)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.save, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val current = dialogBinding.currentPasswordInput.text?.toString().orEmpty()
+                val next = dialogBinding.newPasswordInput.text?.toString().orEmpty()
+                if (current.isBlank() || next.isBlank()) {
+                    showError(getString(R.string.password_required))
+                    return@setOnClickListener
+                }
+                dialog.dismiss()
+                changePassword(current, next)
+            }
+        }
+        dialog.show()
+    }
+
+    private fun changePassword(currentPassword: String, newPassword: String) {
+        setLoading(true)
+        executor.execute {
+            try {
+                val token = validAccessToken()
+                api.changePassword(token, currentPassword, newPassword)
+                runOnUiThread {
+                    Toast.makeText(this, R.string.password_changed, Toast.LENGTH_LONG).show()
+                    clearSession()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    setLoading(false)
+                    showError(getString(R.string.network_error, e.message ?: getString(R.string.unknown_error)))
+                }
+            }
+        }
+    }
+
+    private fun showThemeDialog() {
+        val themes = ThemeMode.values()
+        val labels = themes.map { themeLabel(it) }.toTypedArray()
+        val checked = themes.indexOf(settings.themeMode).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.theme)
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                settings.themeMode = themes[which]
+                applyThemeMode(themes[which])
+                dialog.dismiss()
+                recreate()
+            }
+            .show()
+    }
+
+    private fun applyThemeMode(themeMode: ThemeMode) {
+        AppCompatDelegate.setDefaultNightMode(
+            when (themeMode) {
+                ThemeMode.SYSTEM -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+                ThemeMode.LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
+                ThemeMode.DARK -> AppCompatDelegate.MODE_NIGHT_YES
+            }
+        )
+    }
+
     private fun applyEntryFilter() {
         val query = searchQuery.trim().lowercase()
         val groupFiltered = when {
@@ -589,6 +924,31 @@ class MainActivity : AppCompatActivity() {
             else -> getString(R.string.filter_all)
         }
         binding.filterText.text = getString(R.string.filter_count, filterName, visible.size)
+    }
+
+    private fun exportFileName(format: ExportFormat): String {
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val suffix = if (format == ExportFormat.OTPAUTH) "txt" else "json"
+        return "2fauth-$stamp.$suffix"
+    }
+
+    private fun detectImportFormat(text: String, labels: List<String>): String {
+        val trimmed = text.trim()
+        return when {
+            trimmed.contains("otpauth://", ignoreCase = true) -> labels[1]
+            trimmed.contains("\"encrypted\"") || trimmed.contains("\"ciphertext\"") -> labels[2]
+            else -> labels[0]
+        }
+    }
+
+    private fun themeLabel(theme: ThemeMode): String {
+        return getString(
+            when (theme) {
+                ThemeMode.SYSTEM -> R.string.theme_system
+                ThemeMode.LIGHT -> R.string.theme_light
+                ThemeMode.DARK -> R.string.theme_dark
+            }
+        )
     }
 
     private fun clearSession() {
@@ -646,12 +1006,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateCountdowns() {
         if (entries.isEmpty()) return
         val changed = entries.map { entry ->
-            val next = entry.expiresIn?.let { max(0, it - 1) }
+            val next = if (entry.enabled) entry.expiresIn?.let { max(0, it - 1) } else null
             entry.copy(expiresIn = next)
         }
         entries = changed
         applyEntryFilter()
-        if (changed.any { it.otpType != "hotp" && it.expiresIn == 0 }) {
+        if (changed.any { it.enabled && it.otpType != "hotp" && it.expiresIn == 0 }) {
             refreshEntries()
         }
     }
@@ -680,13 +1040,12 @@ private class EntryAdapter(
     private val onEntryClick: (Entry) -> Unit,
     private val onEditClick: (Entry) -> Unit,
     private val onDeleteClick: (Entry) -> Unit,
-) : RecyclerView.Adapter<EntryAdapter.EntryViewHolder>() {
-    private var items = emptyList<Entry>()
+    private val onEnabledChange: (Entry, Boolean) -> Unit,
+) : ListAdapter<Entry, EntryAdapter.EntryViewHolder>(EntryDiffCallback) {
     private var isManageMode = false
 
     fun submit(next: List<Entry>) {
-        items = next
-        notifyDataSetChanged()
+        submitList(next)
     }
 
     fun setManageMode(value: Boolean) {
@@ -696,26 +1055,27 @@ private class EntryAdapter(
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): EntryViewHolder {
         val binding = ItemEntryBinding.inflate(LayoutInflater.from(parent.context), parent, false)
-        return EntryViewHolder(binding, onEntryClick, onEditClick, onDeleteClick)
+        return EntryViewHolder(binding, onEntryClick, onEditClick, onDeleteClick, onEnabledChange)
     }
 
     override fun onBindViewHolder(holder: EntryViewHolder, position: Int) {
-        holder.bind(items[position], isManageMode)
+        holder.bind(getItem(position), isManageMode)
     }
-
-    override fun getItemCount(): Int = items.size
 
     class EntryViewHolder(
         private val binding: ItemEntryBinding,
         private val onEntryClick: (Entry) -> Unit,
         private val onEditClick: (Entry) -> Unit,
         private val onDeleteClick: (Entry) -> Unit,
+        private val onEnabledChange: (Entry, Boolean) -> Unit,
     ) : RecyclerView.ViewHolder(binding.root) {
         fun bind(entry: Entry, isManageMode: Boolean) {
             binding.iconText.text = serviceIcon(entry)
             binding.labelText.text = entry.label
             binding.metaText.text = buildMeta(entry)
-            binding.codeText.text = if (entry.code.isBlank() && entry.otpType == "hotp") {
+            binding.codeText.text = if (!entry.enabled) {
+                "------"
+            } else if (entry.code.isBlank() && entry.otpType == "hotp") {
                 binding.root.context.getString(R.string.generate)
             } else {
                 entry.code
@@ -723,11 +1083,19 @@ private class EntryAdapter(
             binding.expiresText.text = entry.expiresIn?.let { "${it}s" }.orEmpty()
             binding.editButton.visibility = if (isManageMode) View.VISIBLE else View.GONE
             binding.deleteButton.visibility = if (isManageMode) View.VISIBLE else View.GONE
+            binding.enabledSwitch.visibility = if (isManageMode) View.VISIBLE else View.GONE
             binding.codeText.visibility = if (isManageMode) View.GONE else View.VISIBLE
             binding.expiresText.visibility = if (isManageMode) View.GONE else View.VISIBLE
+            binding.statusText.visibility = if (entry.enabled) View.GONE else View.VISIBLE
+            binding.root.alpha = if (entry.enabled) 1f else 0.62f
             binding.root.setOnClickListener { onEntryClick(entry) }
             binding.editButton.setOnClickListener { onEditClick(entry) }
             binding.deleteButton.setOnClickListener { onDeleteClick(entry) }
+            binding.enabledSwitch.setOnCheckedChangeListener(null)
+            binding.enabledSwitch.isChecked = entry.enabled
+            binding.enabledSwitch.setOnCheckedChangeListener { _, checked ->
+                if (checked != entry.enabled) onEnabledChange(entry, checked)
+            }
         }
 
         private fun buildMeta(entry: Entry): String {
@@ -756,6 +1124,13 @@ private class EntryAdapter(
                 "linkedin" in normalized -> "in"
                 else -> source.take(1).uppercase()
             }
+        }
+    }
+
+    companion object {
+        private val EntryDiffCallback = object : DiffUtil.ItemCallback<Entry>() {
+            override fun areItemsTheSame(oldItem: Entry, newItem: Entry): Boolean = oldItem.id == newItem.id
+            override fun areContentsTheSame(oldItem: Entry, newItem: Entry): Boolean = oldItem == newItem
         }
     }
 }
@@ -823,9 +1198,25 @@ private class ApiClient(workerUrl: String) {
         request("POST", "/api/v1/auth/logout", accessToken = accessToken)
     }
 
+    fun appData(accessToken: String): AppData {
+        return try {
+            val json = request("GET", "/api/app-data", accessToken = accessToken)
+            AppData(
+                entries = parseEntries(json.optJSONArray("entries") ?: JSONArray()),
+                groups = parseGroups(json.optJSONArray("groups") ?: JSONArray()),
+            )
+        } catch (e: ApiException) {
+            AppData(entries(accessToken), groups(accessToken))
+        }
+    }
+
     fun entries(accessToken: String): List<Entry> {
         val json = request("GET", "/api/v1/entries", accessToken = accessToken)
         val array = json.optJSONArray("entries") ?: JSONArray()
+        return parseEntries(array)
+    }
+
+    private fun parseEntries(array: JSONArray): List<Entry> {
         return List(array.length()) { index ->
             val item = array.getJSONObject(index)
             Entry(
@@ -839,6 +1230,7 @@ private class ApiClient(workerUrl: String) {
                 groupName = item.optString("group_name"),
                 groupId = item.optLongOrNull("group_id"),
                 hotpCounter = item.optLong("hotp_counter", 0L),
+                enabled = item.optBooleanCompat("enabled", true),
             )
         }
     }
@@ -846,6 +1238,10 @@ private class ApiClient(workerUrl: String) {
     fun groups(accessToken: String): List<Group> {
         val json = request("GET", "/api/v1/groups", accessToken = accessToken)
         val array = json.optJSONArray("groups") ?: JSONArray()
+        return parseGroups(array)
+    }
+
+    private fun parseGroups(array: JSONArray): List<Group> {
         return List(array.length()) { index ->
             val item = array.getJSONObject(index)
             Group(
@@ -868,6 +1264,11 @@ private class ApiClient(workerUrl: String) {
         request("DELETE", "/api/v1/entries/$entryId", accessToken = accessToken)
     }
 
+    fun setEntryEnabled(accessToken: String, entryId: Long, enabled: Boolean) {
+        val body = JSONObject().put("enabled", enabled)
+        request("PATCH", "/api/v1/entries/$entryId", accessToken = accessToken, body = body)
+    }
+
     fun createGroup(accessToken: String, name: String, color: String) {
         val body = JSONObject()
             .put("name", name)
@@ -877,6 +1278,43 @@ private class ApiClient(workerUrl: String) {
 
     fun deleteGroup(accessToken: String, groupId: Long) {
         request("DELETE", "/api/v1/groups/$groupId", accessToken = accessToken)
+    }
+
+    fun exportPlain(accessToken: String, confirmPassword: String): String {
+        val body = JSONObject().put("confirmPassword", confirmPassword)
+        return requestText("POST", "/api/export", accessToken = accessToken, body = body)
+    }
+
+    fun exportOtpAuth(accessToken: String, confirmPassword: String): String {
+        val body = JSONObject().put("confirmPassword", confirmPassword)
+        return requestText("POST", "/api/export/otpauth", accessToken = accessToken, body = body)
+    }
+
+    fun exportEncrypted(accessToken: String, passphrase: String): String {
+        val body = JSONObject().put("passphrase", passphrase)
+        return requestText("POST", "/api/export/encrypted", accessToken = accessToken, body = body)
+    }
+
+    fun importPlain(accessToken: String, payload: JSONObject) {
+        request("POST", "/api/import", accessToken = accessToken, body = payload)
+    }
+
+    fun importOtpAuth(accessToken: String, text: String) {
+        request("POST", "/api/import/otpauth", accessToken = accessToken, body = JSONObject().put("text", text))
+    }
+
+    fun importEncrypted(accessToken: String, encrypted: JSONObject, passphrase: String) {
+        val body = JSONObject()
+            .put("encrypted", encrypted)
+            .put("passphrase", passphrase)
+        request("POST", "/api/import/encrypted", accessToken = accessToken, body = body)
+    }
+
+    fun changePassword(accessToken: String, currentPassword: String, newPassword: String) {
+        val body = JSONObject()
+            .put("currentPassword", currentPassword)
+            .put("newPassword", newPassword)
+        request("PATCH", "/api/v1/me/password", accessToken = accessToken, body = body)
     }
 
     fun codesBatch(accessToken: String, entryIds: List<Long>): Map<Long, CodeResult> {
@@ -918,6 +1356,15 @@ private class ApiClient(workerUrl: String) {
         accessToken: String? = null,
         body: JSONObject? = null,
     ): JSONObject {
+        return parseJsonObject(requestText(method, path, accessToken, body))
+    }
+
+    private fun requestText(
+        method: String,
+        path: String,
+        accessToken: String? = null,
+        body: JSONObject? = null,
+    ): String {
         val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 15_000
@@ -945,7 +1392,7 @@ private class ApiClient(workerUrl: String) {
         if (status !in 200..299) {
             throw ApiException(json.optString("error", "HTTP $status"))
         }
-        return json
+        return text
     }
 
     private fun parseJsonObject(text: String): JSONObject {
@@ -974,6 +1421,22 @@ private fun JSONObject.optLongOrNull(name: String): Long? {
     return optLong(name)
 }
 
+private fun JSONObject.optBooleanCompat(name: String, defaultValue: Boolean): Boolean {
+    if (!has(name) || isNull(name)) return defaultValue
+    val value = opt(name)
+    return when (value) {
+        is Boolean -> value
+        is Number -> value.toInt() != 0
+        is String -> value.equals("true", ignoreCase = true) || value == "1"
+        else -> defaultValue
+    }
+}
+
+private data class AppData(
+    val entries: List<Entry>,
+    val groups: List<Group>,
+)
+
 private data class ApiSession(
     val accessToken: String,
     val refreshToken: String,
@@ -991,6 +1454,7 @@ private data class Entry(
     val groupName: String,
     val groupId: Long?,
     val hotpCounter: Long,
+    val enabled: Boolean = true,
     val code: String = "",
     val expiresIn: Int? = null,
 )
@@ -1013,6 +1477,7 @@ private data class EntryDraft(
     val hotpCounter: Long,
     val groupId: Long?,
     val includeSecret: Boolean,
+    val enabled: Boolean = true,
 ) {
     fun toJson(isPatch: Boolean): JSONObject {
         val json = JSONObject()
@@ -1024,6 +1489,7 @@ private data class EntryDraft(
             .put("period", period)
             .put("hotpCounter", hotpCounter)
             .put("groupId", groupId ?: JSONObject.NULL)
+            .put("enabled", enabled)
         if (!isPatch && otpauthUri.isNotBlank()) json.put("otpauthUri", otpauthUri)
         if (includeSecret && secret.isNotBlank()) json.put("secret", secret)
         return json
@@ -1040,6 +1506,46 @@ private data class HotpResult(
     val counter: Long,
     val nextCounter: Long,
 )
+
+private data class ExportRequest(
+    val format: ExportFormat,
+    val password: String,
+    val passphrase: String,
+)
+
+private enum class ExportFormat {
+    ENCRYPTED_JSON,
+    PLAIN_JSON,
+    OTPAUTH,
+}
+
+private enum class ImportFormat {
+    PLAIN_JSON,
+    OTPAUTH,
+    ENCRYPTED_JSON,
+}
+
+private enum class ThemeMode {
+    SYSTEM,
+    LIGHT,
+    DARK,
+}
+
+private class AppSettings(context: Context) {
+    private val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+
+    var themeMode: ThemeMode
+        get() = runCatching {
+            ThemeMode.valueOf(prefs.getString(KEY_THEME, ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name)
+        }.getOrDefault(ThemeMode.SYSTEM)
+        set(value) {
+            prefs.edit().putString(KEY_THEME, value.name).apply()
+        }
+
+    companion object {
+        private const val KEY_THEME = "theme"
+    }
+}
 
 private class UnauthorizedException : Exception()
 private class ApiException(message: String) : Exception(message)
