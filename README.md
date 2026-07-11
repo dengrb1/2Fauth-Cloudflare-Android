@@ -33,13 +33,13 @@ The Gradle Wrapper is included. A JDK 17 or newer and Android SDK 35 are require
 macOS/Linux:
 
 ```bash
-./gradlew assembleDebug -PworkerUrl="https://your-worker.workers.dev"
+./gradlew assembleDebug -PworkerUrl="https://2fauth.dengrb.top"
 ```
 
 Windows:
 
 ```powershell
-.\gradlew.bat assembleDebug -PworkerUrl="https://your-worker.workers.dev"
+.\gradlew.bat assembleDebug -PworkerUrl="https://2fauth.dengrb.top"
 ```
 
 If `-PworkerUrl` is omitted, the value from `gradle.properties` is used. Production builds should always provide an HTTPS Worker URL.

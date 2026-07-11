@@ -9,7 +9,7 @@ on:
       worker_url:
         description: 2Fauth Cloudflare Worker URL
         required: false
-        default: https://2fauth.example.workers.dev
+        default: https://2fauth.dengrb.top
         type: string
       run_instrumentation:
         description: Run connected tests on a managed emulator
@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  WORKER_URL: ${{ inputs.worker_url || vars.WORKER_URL || 'https://2fauth.example.workers.dev' }}
+  WORKER_URL: ${{ inputs.worker_url || vars.WORKER_URL || 'https://2fauth.dengrb.top' }}
 
 jobs:
   verify:
