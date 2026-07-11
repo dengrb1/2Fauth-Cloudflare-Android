@@ -1,19 +1,35 @@
-name: Android CI Build
+name: Android CI
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
     inputs:
       worker_url:
-        description: "2Fauth Cloudflare Worker URL"
-        required: true
-        default: "https://2fauth.example.workers.dev"
+        description: 2Fauth Cloudflare Worker URL
+        required: false
+        default: https://2fauth.example.workers.dev
+        type: string
+      run_instrumentation:
+        description: Run connected tests on a managed emulator
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WORKER_URL: ${{ inputs.worker_url || vars.WORKER_URL || 'https://2fauth.example.workers.dev' }}
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
-    env:
-      WORKER_URL: ${{ github.event.inputs.worker_url || vars.WORKER_URL || 'https://2fauth.example.workers.dev' }}
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -25,14 +41,75 @@ jobs:
           java-version: '21'
           cache: gradle
 
-      - name: Setup Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Build Debug APK
-        run: gradle assembleDebug -PworkerUrl="${WORKER_URL}"
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
 
-      - name: Upload debug APK artifact
+      - name: Run debug unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest -PworkerUrl="${WORKER_URL}"
+
+      - name: Run debug lint
+        run: ./gradlew --no-daemon lintDebug -PworkerUrl="${WORKER_URL}"
+
+      - name: Assemble debug APK
+        run: ./gradlew --no-daemon assembleDebug -PworkerUrl="${WORKER_URL}"
+
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-debug
+          path: app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
+
+  instrumentation:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_instrumentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run connected tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: ./gradlew --no-daemon connectedDebugAndroidTest -PworkerUrl="${WORKER_URL}"
+
+      - name: Upload instrumentation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumentation-debug
+          path: app/build/reports/androidTests/connected/debug
+          if-no-files-found: ignore
