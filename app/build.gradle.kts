@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -17,10 +19,7 @@ android {
         versionName = "1.4.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        val workerUrl = (project.findProperty("workerUrl") as String?)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?: "https://2fauth.example.workers.dev"
+        val workerUrl = resolveWorkerUrl()
         buildConfigField("String", "WORKER_URL", "\"$workerUrl\"")
     }
 
@@ -100,4 +99,22 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.navigation:navigation-testing:2.8.5")
+}
+
+private fun Project.resolveWorkerUrl(): String {
+    val local = Properties()
+    listOf("secrets.properties", "local.properties").forEach { name ->
+        val file = rootProject.file(name)
+        if (file.isFile) {
+            file.inputStream().use { stream -> local.load(stream) }
+        }
+    }
+    return sequenceOf(
+        findProperty("workerUrl") as String?,
+        System.getenv("WORKER_URL"),
+        local.getProperty("workerUrl"),
+        local.getProperty("WORKER_URL"),
+    ).mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+        .firstOrNull()
+        ?: "https://2fauth.example.workers.dev"
 }

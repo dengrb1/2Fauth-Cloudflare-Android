@@ -246,18 +246,49 @@ class DefaultTwoFactorRepository(
     }
 
     private suspend fun refreshSession(old: ApiSession): ApiSession {
-        try {
-            val response = safeCall { api.refresh(RefreshRequest(old.refreshToken)) }
-            if (!response.isSuccessful) throw response.toException()
-            val dto = response.body() ?: throw ApiException(ApiError(401, "Invalid empty refresh response"))
-            return dto.toSession(nowMillis(), old.user).also(tokenStore::save)
+        val dto = fetchRefreshedSessionDto(old)
+        return try {
+            dto.toSession(nowMillis(), old.user).also(tokenStore::save)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            runCatching { tokenStore.clear() }.onFailure(error::addSuppressed)
-            throw if (error is ApiException) error else ApiException(ApiError(401, "Session refresh failed"), error)
+            // Local persistence failures must not wipe a still-usable session.
+            throw ApiException(ApiError(503, error.message ?: "Session refresh failed", clientCode = "network"), error)
         }
     }
+
+    private suspend fun fetchRefreshedSessionDto(
+        old: ApiSession,
+    ): com.dengrb1.twfauth.cloudflare.data.remote.SessionDto {
+        val response = try {
+            safeCall { api.refresh(RefreshRequest(old.refreshToken)) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ApiException) {
+            // Includes transport/network failures from safeCall; keep the local session.
+            throw error
+        } catch (error: Exception) {
+            // Unexpected local/transport failures keep the session so the UI can retry.
+            throw ApiException(ApiError(503, error.message ?: "Session refresh failed", clientCode = "network"), error)
+        }
+        if (!response.isSuccessful) {
+            val error = response.toException()
+            if (shouldInvalidateSession(error)) {
+                runCatching { tokenStore.clear() }.onFailure(error::addSuppressed)
+            }
+            throw error
+        }
+        val body = response.body()
+        if (body == null) {
+            val error = ApiException(ApiError(401, "Invalid empty refresh response"))
+            runCatching { tokenStore.clear() }.onFailure(error::addSuppressed)
+            throw error
+        }
+        return body
+    }
+
+    private fun shouldInvalidateSession(error: ApiException): Boolean =
+        error.error.status == 401 || error.error.status == 403
 
     private suspend fun <T> callPublic(call: suspend () -> Response<T>): T = safeCall(call).requireBody()
     private suspend fun <T> safeCall(call: suspend () -> Response<T>): Response<T> = try { call() } catch (e: IOException) {

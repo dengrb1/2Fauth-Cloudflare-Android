@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -40,6 +42,7 @@ fun AuthScreen(
     serverUrl: String,
     onUsernameChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
+    onRememberPasswordChange: (Boolean) -> Unit,
     onLogin: () -> Unit,
     onUnlock: () -> Unit,
     onUsePassword: () -> Unit,
@@ -146,6 +149,18 @@ fun AuthScreen(
                         ),
                         keyboardActions = KeyboardActions(onDone = { onLogin() }),
                     )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag(UiTestTags.REMEMBER_PASSWORD),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = state.rememberPassword,
+                            onCheckedChange = onRememberPasswordChange,
+                        )
+                        Text(stringResource(R.string.remember_password))
+                    }
                     Button(
                         onClick = onLogin,
                         enabled = state.canSubmit,

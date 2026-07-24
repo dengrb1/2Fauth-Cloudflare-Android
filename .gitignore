@@ -39,3 +39,16 @@ secrets.properties
 *.class
 /bin/
 /gen/
+
+# Local command output / agent logs
+/logs/
+gradle-test-*.txt
+*-test-out.txt
+*-test-err.txt
+
+# Extra secret files
+secrets.local.properties
+local.secrets.properties
+signing.properties
+*.pepk
+

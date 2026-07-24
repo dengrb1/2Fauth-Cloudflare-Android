@@ -15,6 +15,7 @@ open class FakeUiGateway : UiGateway {
     var createEntryError: Throwable? = null
     var logoutError: Throwable? = null
     var passwordChanged = false
+    var loginCredentialsValue = SavedLoginCredentials()
 
     override suspend fun capabilities() = CapabilityUiModel("v1", setOf("android"), false)
     override suspend fun hasSavedSession() = savedSession
@@ -22,7 +23,11 @@ open class FakeUiGateway : UiGateway {
         loginError?.let { throw it }; lastTurnstileToken = turnstileToken; return UserUiModel("1", username, "user")
     }
     override suspend fun currentUser() = UserUiModel("1", "alice", "user")
-    override open suspend fun logout() { savedSession = false; logoutError?.let { throw it } }
+    override open suspend fun logout() {
+        savedSession = false
+        loginCredentialsValue = loginCredentialsValue.copy(password = "")
+        logoutError?.let { throw it }
+    }
     override open suspend fun entries() = entryValues.toList()
     override open suspend fun groups() = groupValues.toList()
     override open suspend fun refreshCodes(entryIds: List<Long>): Map<Long, Pair<String, Long?>> =
@@ -43,5 +48,19 @@ open class FakeUiGateway : UiGateway {
     override open suspend fun setTheme(theme: ThemePreference) { preferencesValue = preferencesValue.copy(theme = theme) }
     override open suspend fun setLanguage(language: LanguagePreference) { preferencesValue = preferencesValue.copy(language = language) }
     override open suspend fun setAppLock(enabled: Boolean) { preferencesValue = preferencesValue.copy(appLockEnabled = enabled) }
-    override open suspend fun changePassword(currentPassword: String, newPassword: String) { passwordChanged = true }
+    override open suspend fun changePassword(currentPassword: String, newPassword: String) {
+        passwordChanged = true
+        loginCredentialsValue = loginCredentialsValue.copy(password = "")
+    }
+    override suspend fun loginCredentials() = loginCredentialsValue
+    override suspend fun rememberLogin(username: String, password: String?, rememberPassword: Boolean) {
+        loginCredentialsValue = SavedLoginCredentials(
+            username = username,
+            password = password.orEmpty().takeIf { rememberPassword }.orEmpty(),
+            rememberPassword = rememberPassword,
+        )
+    }
+    override suspend fun clearRememberedPassword() {
+        loginCredentialsValue = loginCredentialsValue.copy(password = "", rememberPassword = false)
+    }
 }

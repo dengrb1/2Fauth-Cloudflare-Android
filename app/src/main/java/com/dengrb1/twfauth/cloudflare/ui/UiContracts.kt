@@ -20,6 +20,7 @@ object UiTestTags {
     const val AUTH_FORM = "auth_form"
     const val USERNAME = "username"
     const val PASSWORD = "password"
+    const val REMEMBER_PASSWORD = "remember_password"
     const val LOGIN = "login"
     const val UNLOCK = "unlock"
     const val BOTTOM_NAV = "bottom_nav"

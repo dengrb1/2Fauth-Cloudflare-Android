@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import com.dengrb1.twfauth.cloudflare.ui.FakeUiGateway
 import com.dengrb1.twfauth.cloudflare.ui.MainDispatcherRule
 import com.dengrb1.twfauth.cloudflare.ui.model.CapabilityUiModel
+import com.dengrb1.twfauth.cloudflare.ui.model.SavedLoginCredentials
 import com.dengrb1.twfauth.cloudflare.ui.model.UiGatewayException
 import com.dengrb1.twfauth.cloudflare.ui.model.UserUiModel
 import kotlinx.coroutines.CompletableDeferred
@@ -66,6 +67,46 @@ class AuthViewModelTest {
         vm.login { "challenge-${++challenges}" }; advanceUntilIdle()
         assertEquals(listOf("challenge-1", "challenge-2"), tokens)
         assertEquals("alice", vm.state.value.signedInUser?.username)
+    }
+
+
+    @Test fun prefillsRememberedCredentialsOnLoginScreen() = runTest(main.dispatcher) {
+        val gateway = FakeUiGateway().apply {
+            loginCredentialsValue = SavedLoginCredentials("alice", "Password-123!", rememberPassword = true)
+        }
+        val vm = AuthViewModel(gateway, SavedStateHandle())
+        advanceUntilIdle()
+        assertEquals(AuthMode.Login, vm.state.value.mode)
+        assertEquals("alice", vm.state.value.username)
+        assertEquals("Password-123!", vm.state.value.password)
+        assertTrue(vm.state.value.rememberPassword)
+    }
+
+    @Test fun successfulLoginPersistsCredentialsWhenRememberEnabled() = runTest(main.dispatcher) {
+        val gateway = FakeUiGateway()
+        val vm = AuthViewModel(gateway, SavedStateHandle())
+        advanceUntilIdle()
+        vm.setUsername("alice"); vm.setPassword("Password-123!"); vm.setRememberPassword(true)
+        vm.login { null }
+        advanceUntilIdle()
+        assertEquals("alice", gateway.loginCredentialsValue.username)
+        assertEquals("Password-123!", gateway.loginCredentialsValue.password)
+        assertTrue(gateway.loginCredentialsValue.rememberPassword)
+    }
+
+    @Test fun successfulLoginSkipsPasswordWhenRememberDisabled() = runTest(main.dispatcher) {
+        val gateway = FakeUiGateway().apply {
+            loginCredentialsValue = SavedLoginCredentials("old", "secret", rememberPassword = true)
+        }
+        val vm = AuthViewModel(gateway, SavedStateHandle())
+        advanceUntilIdle()
+        vm.setUsername("alice"); vm.setPassword("Password-123!"); vm.setRememberPassword(false)
+        advanceUntilIdle()
+        vm.login { null }
+        advanceUntilIdle()
+        assertEquals("alice", gateway.loginCredentialsValue.username)
+        assertEquals("", gateway.loginCredentialsValue.password)
+        assertFalse(gateway.loginCredentialsValue.rememberPassword)
     }
 
     @Test fun authenticationRequestIsCancelledWhenTheScreenStops() = runTest(main.dispatcher) {

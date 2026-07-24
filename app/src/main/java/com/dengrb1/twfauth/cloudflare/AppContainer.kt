@@ -5,6 +5,8 @@ import android.content.Context
 import com.dengrb1.twfauth.cloudflare.data.DefaultTwoFactorRepository
 import com.dengrb1.twfauth.cloudflare.data.remote.ApiFactory
 import com.dengrb1.twfauth.cloudflare.data.remote.EncryptedBackupDto
+import com.dengrb1.twfauth.cloudflare.data.session.CredentialStore
+import com.dengrb1.twfauth.cloudflare.data.session.EncryptedCredentialStore
 import com.dengrb1.twfauth.cloudflare.data.session.TokenStore
 import com.dengrb1.twfauth.cloudflare.domain.ApiException
 import com.dengrb1.twfauth.cloudflare.domain.CreateEntryInput
@@ -29,6 +31,7 @@ import com.dengrb1.twfauth.cloudflare.ui.model.OtpEntryDraft
 import com.dengrb1.twfauth.cloudflare.ui.model.OtpEntryUiModel
 import com.dengrb1.twfauth.cloudflare.ui.model.OtpGroupUiModel
 import com.dengrb1.twfauth.cloudflare.ui.model.OtpKind
+import com.dengrb1.twfauth.cloudflare.ui.model.SavedLoginCredentials
 import com.dengrb1.twfauth.cloudflare.ui.model.ThemePreference
 import com.dengrb1.twfauth.cloudflare.ui.model.UiGateway
 import com.dengrb1.twfauth.cloudflare.ui.model.UiGatewayException
@@ -42,13 +45,15 @@ class AppContainer(context: Context) {
     private val appContext = context.applicationContext
     private val deviceSecure = appContext.getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
     val tokenStore = TokenStore(appContext, persistenceAllowed = deviceSecure)
+    val credentialStore: CredentialStore = EncryptedCredentialStore(appContext)
     val repository: TwoFactorRepository = DefaultTwoFactorRepository(ApiFactory.create(BuildConfig.WORKER_URL), tokenStore)
-    val uiGateway: UiGateway = AndroidUiGateway(appContext, repository)
+    val uiGateway: UiGateway = AndroidUiGateway(appContext, repository, credentialStore)
 }
 
 private class AndroidUiGateway(
     private val context: Context,
     private val repository: TwoFactorRepository,
+    private val credentialStore: CredentialStore,
 ) : UiGateway {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
@@ -77,7 +82,13 @@ private class AndroidUiGateway(
     override suspend fun login(username: String, password: String, turnstileToken: String?): UserUiModel =
         api { repository.login(username, password, turnstileToken).user ?: repository.me() }.toUi()
     override suspend fun currentUser(): UserUiModel = api { repository.session()?.user ?: repository.me() }.toUi()
-    override suspend fun logout() = api { repository.logout() }
+    override suspend fun logout() {
+        try {
+            api { repository.logout() }
+        } finally {
+            credentialStore.clearPassword()
+        }
+    }
 
     override suspend fun entries(): List<OtpEntryUiModel> = api { repository.entries() }.map(OtpEntry::toUi)
     override suspend fun groups(): List<OtpGroupUiModel> = api { repository.groups() }.map(OtpGroup::toUi)
@@ -189,7 +200,24 @@ private class AndroidUiGateway(
         LocaleHelper.setLanguage(context, value)
     }
     override suspend fun setAppLock(enabled: Boolean) { preferences.edit().putBoolean(KEY_APP_LOCK, enabled).apply() }
-    override suspend fun changePassword(currentPassword: String, newPassword: String) = api { repository.changePassword(currentPassword, newPassword) }
+    override suspend fun changePassword(currentPassword: String, newPassword: String) {
+        api { repository.changePassword(currentPassword, newPassword) }
+        credentialStore.clearPassword()
+    }
+
+    override suspend fun loginCredentials(): SavedLoginCredentials = credentialStore.load().let {
+        SavedLoginCredentials(it.username, it.password, it.rememberPassword)
+    }
+
+    override suspend fun rememberLogin(username: String, password: String?, rememberPassword: Boolean) {
+        credentialStore.saveLogin(username, password, rememberPassword)
+    }
+
+    override suspend fun clearRememberedPassword() {
+        credentialStore.clearPassword()
+        val current = credentialStore.load()
+        credentialStore.saveLogin(current.username, null, rememberPassword = false)
+    }
 
     @Suppress("DEPRECATION")
     private fun migratePreferences() {

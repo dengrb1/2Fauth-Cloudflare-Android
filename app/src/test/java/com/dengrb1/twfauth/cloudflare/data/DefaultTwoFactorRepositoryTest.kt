@@ -283,22 +283,43 @@ class DefaultTwoFactorRepositoryTest {
         assertTrue(bodies[0].contains("[1,2]")); assertTrue(bodies[1].contains("[3,4]")); assertTrue(bodies[2].contains("[5]"))
     }
 
-    @Test fun refreshTransportEmptyBodyAndPersistenceFailuresAllClearSession() = runTest {
-        suspend fun exercise(refreshResponse: MockResponse, failSave: Boolean = false) {
+    @Test fun emptyRefreshBodyPreservesSessionForRetry() = runTest {
+        store.value = savedSession("old-access", "old-refresh")
+        val clearsBefore = store.clearCount
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":\"expired\"}"))
+        server.enqueue(MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json"))
+        runCatching { repository.entries() }
+        assertEquals("old-refresh", store.value?.refreshToken)
+        assertEquals(clearsBefore, store.clearCount)
+    }
+
+    @Test fun refreshNetworkAndServerErrorsPreserveSession() = runTest {
+        suspend fun exercise(refreshResponse: MockResponse) {
             store.value = savedSession("old-access", "old-refresh")
-            store.failSave = failSave
             val clearsBefore = store.clearCount
             server.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":\"expired\"}"))
             server.enqueue(refreshResponse)
             runCatching { repository.entries() }
-            assertNull(store.value)
-            assertEquals(clearsBefore + 1, store.clearCount)
-            store.failSave = false
+            assertEquals("old-refresh", store.value?.refreshToken)
+            assertEquals(clearsBefore, store.clearCount)
         }
-        exercise(MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json"))
         exercise(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
-        exercise(json(SESSION), failSave = true)
+        exercise(MockResponse().setResponseCode(503).setBody("{\"error\":\"unavailable\"}"))
+        exercise(MockResponse().setResponseCode(429).setHeader("Retry-After", "2").setBody("{\"error\":\"slow\"}"))
     }
+
+    @Test fun refreshPersistenceFailureDoesNotClearExistingSession() = runTest {
+        store.value = savedSession("old-access", "old-refresh")
+        store.failSave = true
+        val clearsBefore = store.clearCount
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":\"expired\"}"))
+        server.enqueue(json(SESSION))
+        runCatching { repository.entries() }
+        assertEquals("old-refresh", store.value?.refreshToken)
+        assertEquals(clearsBefore, store.clearCount)
+        store.failSave = false
+    }
+
 
     @Test fun cancellingRefreshDoesNotClearAStillValidStoredSession() = runBlocking {
         store.value = savedSession("old-access", "old-refresh")

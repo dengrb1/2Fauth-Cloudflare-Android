@@ -157,6 +157,7 @@ fun TwoFactorApp(gateway: UiGateway, platformActions: PlatformActions = Platform
             AuthScreen(
                 state = state, serverUrl = gateway.serverUrl,
                 onUsernameChange = authViewModel::setUsername, onPasswordChange = authViewModel::setPassword,
+                onRememberPasswordChange = authViewModel::setRememberPassword,
                 onLogin = { authViewModel.login(platformActions.requestTurnstileToken) },
                 onUnlock = { authViewModel.unlock(platformActions.requestDeviceUnlock) },
                 onUsePassword = authViewModel::usePasswordInstead, onDismissError = authViewModel::clearError,
@@ -289,7 +290,9 @@ private fun CodesScreen(state: CodesUiState, vm: CodesViewModel, gateway: UiGate
                 else -> LazyVerticalGrid(
                     columns = GridCells.Adaptive(300.dp), modifier = Modifier.fillMaxSize().testTag(UiTestTags.CODES_LIST),
                     verticalArrangement = Arrangement.spacedBy(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 16.dp, top = 16.dp, end = 16.dp, bottom = 152.dp,
+                    ),
                 ) {
                     items(state.visibleEntries, key = { it.id }) { entry ->
                         OtpCard(

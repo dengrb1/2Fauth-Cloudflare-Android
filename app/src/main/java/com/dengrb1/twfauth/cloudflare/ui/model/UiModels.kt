@@ -105,6 +105,14 @@ data class AppPreferencesUiModel(
     val appLockEnabled: Boolean = true,
 )
 
+@Immutable
+data class SavedLoginCredentials(
+    val username: String = "",
+    val password: String = "",
+    val rememberPassword: Boolean = true,
+)
+
+
 class UiGatewayException(
     val status: Int? = null,
     override val message: String,
@@ -152,4 +160,8 @@ interface UiGateway {
     suspend fun setLanguage(language: LanguagePreference)
     suspend fun setAppLock(enabled: Boolean)
     suspend fun changePassword(currentPassword: String, newPassword: String)
+
+    suspend fun loginCredentials(): SavedLoginCredentials
+    suspend fun rememberLogin(username: String, password: String?, rememberPassword: Boolean)
+    suspend fun clearRememberedPassword()
 }

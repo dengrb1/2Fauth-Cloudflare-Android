@@ -253,4 +253,7 @@ private class TestGateway(
         passwordChanged = true
         saved = false
     }
+    override suspend fun loginCredentials() = SavedLoginCredentials()
+    override suspend fun rememberLogin(username: String, password: String?, rememberPassword: Boolean) = Unit
+    override suspend fun clearRememberedPassword() = Unit
 }

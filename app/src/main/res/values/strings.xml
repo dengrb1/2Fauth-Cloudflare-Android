@@ -113,6 +113,7 @@
     <string name="unlock">Unlock</string>
     <string name="use_password_instead">Use password instead</string>
     <string name="signing_in">Signing in…</string>
+    <string name="remember_password">Remember password</string>
     <string name="sign_in">Sign in</string>
     <string name="turnstile_required_notice">This server requires a security challenge before sign-in.</string>
     <string name="dismiss">Dismiss</string>

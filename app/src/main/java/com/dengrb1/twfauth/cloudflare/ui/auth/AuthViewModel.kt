@@ -23,6 +23,7 @@ data class AuthUiState(
     val mode: AuthMode = AuthMode.Loading,
     val username: String = "",
     val password: String = "",
+    val rememberPassword: Boolean = true,
     val capabilities: CapabilityUiModel? = null,
     val isSubmitting: Boolean = false,
     val error: String? = null,
@@ -43,7 +44,10 @@ class AuthViewModel(
 ) : CooldownViewModel() {
     private var active = true
     private val _state = MutableStateFlow(
-        AuthUiState(username = savedStateHandle.get<String>(KEY_USERNAME).orEmpty()),
+        AuthUiState(
+            username = savedStateHandle.get<String>(KEY_USERNAME).orEmpty(),
+            rememberPassword = savedStateHandle.get<Boolean>(KEY_REMEMBER_PASSWORD) ?: true,
+        ),
     )
     val state: StateFlow<AuthUiState> = _state.asStateFlow()
 
@@ -64,11 +68,12 @@ class AuthViewModel(
                         _state.update { it.copy(mode = AuthMode.Unlock, signedInUser = gateway.currentUser()) }
                     }
                 } else {
-                    _state.update { it.copy(mode = AuthMode.Login, error = null) }
+                    applySavedCredentials(AuthMode.Login)
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                runCatching { applySavedCredentials(AuthMode.Login) }
                 showError(error, AuthMode.Login)
             }
         }
@@ -86,9 +91,31 @@ class AuthViewModel(
     private suspend fun loadCapabilities() {
         runUiCatching { gateway.capabilities() }
             .onSuccess { capabilities ->
-                _state.update { it.copy(mode = AuthMode.Login, capabilities = capabilities, error = null) }
+                _state.update { it.copy(capabilities = capabilities, error = null, localError = null, errorStatus = null, errorServerMessage = false, errorClientCode = null) }
+                applySavedCredentials(AuthMode.Login)
             }
             .onFailure { showError(it, AuthMode.Login) }
+    }
+
+    private suspend fun applySavedCredentials(mode: AuthMode) {
+        val credentials = runUiCatching { gateway.loginCredentials() }.getOrDefault(
+            com.dengrb1.twfauth.cloudflare.ui.model.SavedLoginCredentials(
+                username = _state.value.username,
+                password = _state.value.password,
+                rememberPassword = _state.value.rememberPassword,
+            ),
+        )
+        val username = _state.value.username.ifBlank { credentials.username }
+        savedStateHandle[KEY_USERNAME] = username
+        savedStateHandle[KEY_REMEMBER_PASSWORD] = credentials.rememberPassword
+        _state.update {
+            it.copy(
+                mode = mode,
+                username = username,
+                password = if (credentials.rememberPassword) credentials.password else it.password,
+                rememberPassword = credentials.rememberPassword,
+            )
+        }
     }
 
     fun setUsername(value: String) {
@@ -98,6 +125,16 @@ class AuthViewModel(
 
     fun setPassword(value: String) {
         _state.update { it.copy(password = value, error = null, localError = null) }
+    }
+
+    fun setRememberPassword(value: Boolean) {
+        savedStateHandle[KEY_REMEMBER_PASSWORD] = value
+        _state.update { it.copy(rememberPassword = value, error = null, localError = null) }
+        if (!value) {
+            launchScreenTask {
+                runUiCatching { gateway.clearRememberedPassword() }
+            }
+        }
     }
 
     fun login(requestTurnstileToken: suspend (String) -> String?) {
@@ -118,7 +155,20 @@ class AuthViewModel(
                     null
                 }
                 val user = gateway.login(snapshot.username.trim(), snapshot.password, token)
-                _state.update { it.copy(isSubmitting = false, password = "", signedInUser = user) }
+                runUiCatching {
+                    gateway.rememberLogin(
+                        username = snapshot.username.trim(),
+                        password = snapshot.password.takeIf { snapshot.rememberPassword },
+                        rememberPassword = snapshot.rememberPassword,
+                    )
+                }
+                _state.update {
+                    it.copy(
+                        isSubmitting = false,
+                        password = if (snapshot.rememberPassword) snapshot.password else "",
+                        signedInUser = user,
+                    )
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -182,5 +232,6 @@ class AuthViewModel(
 
     private companion object {
         const val KEY_USERNAME = "auth.username"
+        const val KEY_REMEMBER_PASSWORD = "auth.remember_password"
     }
 }
